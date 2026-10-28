@@ -2,6 +2,7 @@
 const pool = require('../config/db');
 const quote = value => '`'+value.replace(/`/g,'``')+'`';
 const fields = ['UserID','CompanyID','RoleID','WarehouseID','BranchID','FirstName','LastName','Email','Status','ModuleAccess','CreatedAt'];
+
 async function migrate() {
  const conn = await pool.getConnection();
  try {
@@ -11,14 +12,30 @@ async function migrate() {
    FirstName VARCHAR(50) NOT NULL, LastName VARCHAR(50) NOT NULL, Email VARCHAR(150) NOT NULL,
    Status VARCHAR(20) NOT NULL, ModuleAccess JSON NULL, CreatedAt DATETIME NOT NULL
   )`);
+
+  // Ensure UserIdSequence exists before running the sequence update query below
+  await conn.query(`CREATE TABLE IF NOT EXISTS UserIdSequence (
+   SequenceID INT PRIMARY KEY DEFAULT 1,
+   NextValue INT NOT NULL DEFAULT 1
+  )`);
+  await conn.query(`INSERT IGNORE INTO UserIdSequence (SequenceID, NextValue) VALUES (1, 1)`);
+
   const names=fields.map(quote).join(',');
-  for(const event of ['INSERT','UPDATE']) {
-   const trigger='user_history_'+event.toLowerCase();
-   const [found]=await conn.query('SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME=:trigger',{trigger});
-   if(!found.length) await conn.query(`CREATE TRIGGER ${quote(trigger)} AFTER ${event} ON User FOR EACH ROW
-    INSERT INTO UserHistory (${names}) VALUES (${fields.map(f=>'NEW.'+quote(f)).join(',')})
-    ON DUPLICATE KEY UPDATE ${fields.filter(f=>f!=='UserID').map(f=>quote(f)+'=NEW.'+quote(f)).join(',')}`);
+
+  // Preserve original trigger logic for local MySQL while bypassing for TiDB Cloud
+  const [versionResult] = await conn.query('SELECT VERSION() AS version');
+  const isTiDB = versionResult[0]?.version?.toLowerCase().includes('tidb');
+
+  if (!isTiDB) {
+   for(const event of ['INSERT','UPDATE']) {
+    const trigger='user_history_'+event.toLowerCase();
+    const [found]=await conn.query('SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME=:trigger',{trigger});
+    if(!found.length) await conn.query(`CREATE TRIGGER ${quote(trigger)} AFTER ${event} ON User FOR EACH ROW
+     INSERT INTO UserHistory (${names}) VALUES (${fields.map(f=>'NEW.'+quote(f)).join(',')})
+     ON DUPLICATE KEY UPDATE ${fields.filter(f=>f!=='UserID').map(f=>quote(f)+'=NEW.'+quote(f)).join(',')}`);
+   }
   }
+
   await conn.query(`INSERT INTO UserHistory (${names}) SELECT ${names} FROM User
    ON DUPLICATE KEY UPDATE ${fields.filter(f=>f!=='UserID').map(f=>quote(f)+'=VALUES('+quote(f)+')').join(',')}`);
   // Password-reset tokens belong to the live account and are removed on delete.
@@ -37,5 +54,6 @@ async function migrate() {
  } catch(error) {await conn.rollback();throw error;}
  finally {conn.release();}
 }
+
 if(require.main===module)migrate().catch(e=>{console.error(e.message);process.exitCode=1;}).finally(()=>pool.end());
 module.exports=migrate;

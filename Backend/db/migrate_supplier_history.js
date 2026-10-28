@@ -8,11 +8,16 @@ async function migrate() {
     const names = columns.map(c => c.Field);
     const quoted = names.map(n => `\`${n}\``).join(', ');
     const assignments = names.filter(n => n !== 'SupplierID').map(n => `\`${n}\` = NEW.\`${n}\``).join(', ');
+    
+    // Comment out trigger creation for TiDB Cloud, as it does not support triggers. You can uncomment this section if you are using a MySQL database that supports triggers.
+    /*
     for (const event of ['INSERT', 'UPDATE']) {
       const trigger = `supplier_history_${event.toLowerCase()}`;
       const [found] = await conn.query('SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = :trigger', {trigger});
       if (!found.length) await conn.query(`CREATE TRIGGER ${trigger} AFTER ${event} ON Supplier FOR EACH ROW INSERT INTO SupplierHistory (${quoted}) VALUES (${names.map(n => `NEW.\`${n}\``).join(', ')}) ON DUPLICATE KEY UPDATE ${assignments}`);
     }
+      */
+     
     await conn.query(`INSERT IGNORE INTO SupplierHistory (${quoted}) SELECT ${quoted} FROM Supplier`);
     const [fks] = await conn.query(`SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = 'Supplier'`);
     for (const fk of fks) {

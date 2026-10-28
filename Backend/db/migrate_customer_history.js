@@ -26,6 +26,9 @@ async function migrate() {
    if(!['order','sales'].includes(fk.TABLE_NAME.toLowerCase()) || fk.COLUMN_NAME!=='CustomerID') throw new Error(`Unexpected customer reference: ${fk.TABLE_NAME}.${fk.COLUMN_NAME}; review before enabling deletion.`);
    await conn.query(`ALTER TABLE ${quote(fk.TABLE_NAME)} DROP FOREIGN KEY ${quote(fk.CONSTRAINT_NAME)}, MODIFY CustomerID VARCHAR(20) NULL, ADD CONSTRAINT ${quote("customer_history_"+fk.TABLE_NAME.toLowerCase())} FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE RESTRICT`);
   }
+  
+  // Comment out this trigger loop for TiDB Cloud, as it does not support triggers. Uncomment for MySQL or MariaDB.
+  /*
   for(const table of ['Order','Sales','Payment','Delivery']) {
    const trigger='customer_snapshot_'+table.toLowerCase();
    await conn.query(`DROP TRIGGER IF EXISTS ${quote(trigger)}`);
@@ -37,6 +40,7 @@ async function migrate() {
    const fallback=table==='Sales'?fields.map((f,i)=>`SET NEW.${f}=COALESCE(NEW.${f},(SELECT ${['CustomerID','CustomerName','ContactNo','Address','CustomerType'][i]} FROM Customer WHERE CustomerID=NEW.CustomerID));`).join('\n'):'';
    await conn.query(`CREATE TRIGGER ${quote(trigger)} BEFORE INSERT ON ${quote(table)} FOR EACH ROW BEGIN ${assignments} ${fallback} END`);
   }
+*/
   console.log('Customer snapshots and restrictive nullable references ready.');
  } finally {conn.release();}
 }
