@@ -32,7 +32,6 @@ const app = express();
 // Configured allowed origins list
 const allowedOrigins = [
   "https://gastrack-frontend-v2.vercel.app",
-  
 ];
 
 // Add process.env.CORS_ORIGIN if set and not already included
@@ -51,10 +50,12 @@ app.use(
       // Allow non-browser requests (e.g. mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
 
-      // Check against allowed list, any .vercel.app domain, or localhost
+      // Check against allowed list, Vercel apps, Firebase domains, or localhost
       if (
         allowedOrigins.includes(origin) ||
         /\.vercel\.app$/.test(origin) ||
+        /\.web\.app$/.test(origin) ||
+        /\.firebaseapp\.com$/.test(origin) ||
         origin.includes("localhost")
       ) {
         return callback(null, true);
@@ -102,5 +103,3 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`GasTrack API listening on port ${PORT}`));
-
-
