@@ -152,13 +152,13 @@ async function sendPO(req) {
     if(po.Status!=='Pending') throw new ApiError(409,'Only pending orders can be sent.');
     if(!po.WarehouseID) throw new ApiError(409,'Legacy PO has no destination warehouse; review it before dispatch.');
     try {
-      if(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASS) throw new Error('SMTP is not configured.');
+      if(!process.env.RESEND_API_KEY||!process.env.RESEND_FROM) throw new Error('Email service is not configured.');
       const document = await supplierDocument(conn, po, req.user.companyId);
       const text=purchaseOrderText(document);
       const pdf=purchaseOrderPDF(document);
       const result=await transporter.sendMail({from:process.env.SMTP_FROM||process.env.SMTP_USER,to:document.supplier.Email,subject:`Purchase Order ${po.PONo}`,text,attachments:[{filename:`${po.PONo}.pdf`,content:await pdf}]});
       if(!result.accepted?.length) throw new Error('SMTP did not accept the supplier email.');
-    } catch(error) { console.error(`PO ${po.PONo} email failed:`,error.message); throw new ApiError(502,'Supplier email failed or SMTP is unconfigured. PO remains Pending; retry Send after checking configuration.'); }
+    } catch(error) { console.error(`PO ${po.PONo} email failed:`,error.message); throw new ApiError(502,'Supplier email failed or email service is unconfigured. PO remains Pending; retry Send after checking configuration.'); }
     await conn.query(`UPDATE PurchaseOrder SET Status='Sent' WHERE PurchaseOrderID=:id`,{id:po.PurchaseOrderID});
     return {message:'Purchase order sent.'};
   });
@@ -190,7 +190,7 @@ router.put('/:id/send-payment', asyncHandler(async (req, res) => {
     const document = await supplierDocument(conn, po, req.user.companyId);
     if (!document.supplier?.Email) throw new ApiError(400, 'Supplier must have a saved email address.');
     try {
-      if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) throw new Error('SMTP is not configured.');
+      if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM) throw new Error('Email service is not configured.');
       const pdf = await purchaseOrderPDF({...document,paymentReceipt:true});
       const result = await transporter.sendMail({from:process.env.SMTP_FROM||process.env.SMTP_USER,to:document.supplier.Email,subject:`Payment Acknowledgment - ${po.PONo}`,text:`Dear ${document.supplier.SupplierName},\n\nPlease find attached the payment acknowledgment for purchase order ${po.PONo}.\nPayment Method: ${po.PaymentMethod}\nReference No.: ${po.PaymentReference}\nAmount Paid: ${po.AmountPaid == null ? 'Not recorded' : `PHP ${Number(po.AmountPaid).toFixed(2)}`}\n\nRegards,\n${document.business.name}`,attachments:[{filename:`${po.PONo}-payment.pdf`,content:pdf}]});
       if (!result.accepted?.length) throw new Error('SMTP did not accept the supplier email.');
