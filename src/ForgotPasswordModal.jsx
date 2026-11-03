@@ -23,22 +23,29 @@ export default function ForgotPasswordModal({ isOpen, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim()) {
+    const recipientEmail = email.trim();
+    if (!recipientEmail) {
       setError("Please enter your email address.");
       return;
     }
     setIsSubmitting(true);
     setError("");
     setMessage("");
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const result = await apiRequest("/auth/forgot-password", {
         method: "POST",
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: recipientEmail }),
+        signal: controller.signal,
       });
-      setMessage(result.message);
+      setMessage(result.message || "If an account exists for that email, a password reset link has been sent.");
     } catch (err) {
-      setError(err.message || "Something went wrong. Please try again.");
+      setError(err.name === "AbortError"
+        ? "The password reset service is taking too long to respond. Please try again later."
+        : err.message || "Something went wrong. Please try again.");
     } finally {
+      clearTimeout(timeoutId);
       setIsSubmitting(false);
     }
   };

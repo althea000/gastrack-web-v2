@@ -211,25 +211,40 @@ router.post(
 // ---------------------------------------------------------------------------
 
 const RESET_TOKEN_TTL_MINUTES = 30;
+const PASSWORD_RESET_OPERATION_TIMEOUT_MS = 15000;
 
 function hashToken(rawToken) {
   return crypto.createHash("sha256").update(rawToken).digest("hex");
+}
+
+function withTimeout(operation, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new ApiError(504, message)), PASSWORD_RESET_OPERATION_TIMEOUT_MS);
+  });
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 // POST /auth/forgot-password
 router.post(
   "/forgot-password",
   asyncHandler(async (req, res) => {
-    const { email } = req.body;
+    const email = String(req.body?.email || "").trim().toLowerCase();
     if (!email) throw new ApiError(400, "Email is required.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new ApiError(400, "Please enter a valid email address.");
+    }
 
     const genericResponse = {
       message: "If an account exists for that email, a password reset link has been sent.",
     };
 
-    const [rows] = await pool.query(
-      `SELECT UserID, FirstName, Status FROM User WHERE Email = :email`,
-      { email }
+    const [rows] = await withTimeout(
+      pool.query(
+        `SELECT UserID, FirstName, Email, Status FROM User WHERE LOWER(TRIM(Email)) = :email`,
+        { email }
+      ),
+      "The password reset service timed out while checking the account. Please try again later."
     );
     const user = rows[0];
 
@@ -242,23 +257,30 @@ router.post(
     const tokenId = generateId("PRT");
     const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000);
 
-    await pool.query(
-      `UPDATE PasswordResetToken SET UsedAt = NOW() WHERE UserID = :userId AND UsedAt IS NULL`,
-      { userId: user.UserID }
+    await withTimeout(
+      pool.query(
+        `UPDATE PasswordResetToken SET UsedAt = NOW() WHERE UserID = :userId AND UsedAt IS NULL`,
+        { userId: user.UserID }
+      ),
+      "The password reset service timed out. Please try again later."
     );
-    await pool.query(
-      `INSERT INTO PasswordResetToken (TokenID, UserID, TokenHash, ExpiresAt)
-       VALUES (:tokenId, :userId, :tokenHash, :expiresAt)`,
-      { tokenId, userId: user.UserID, tokenHash, expiresAt }
+    await withTimeout(
+      pool.query(
+        `INSERT INTO PasswordResetToken (TokenID, UserID, TokenHash, ExpiresAt)
+         VALUES (:tokenId, :userId, :tokenHash, :expiresAt)`,
+        { tokenId, userId: user.UserID, tokenHash, expiresAt }
+      ),
+      "The password reset service timed out. Please try again later."
     );
 
     const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}${process.env.FRONTEND_BASE_PATH || ""}/#/reset-password?token=${rawToken}`;
 
     try {
-      await sendMail({
-        to: email,
-        subject: "Reset your GasTrack password",
-        html: `
+      await withTimeout(
+        sendMail({
+          to: user.Email,
+          subject: "Reset your GasTrack password",
+          html: `
           <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
             <h2 style="color:#1e3a5f;">Reset your password</h2>
             <p>Hi ${user.FirstName || "there"},</p>
@@ -270,10 +292,13 @@ router.post(
             <p style="color:#9ca3af; font-size:0.75rem;">If the button doesn't work, copy and paste this link into your browser:<br>${resetUrl}</p>
           </div>
         `,
-        text: `Reset your GasTrack password: ${resetUrl} (expires in ${RESET_TOKEN_TTL_MINUTES} minutes)`,
-      });
+          text: `Reset your GasTrack password: ${resetUrl} (expires in ${RESET_TOKEN_TTL_MINUTES} minutes)`,
+        }),
+        "The email service timed out while sending the password reset email. Please try again later."
+      );
     } catch (err) {
       console.error("Failed to send password reset email:", err);
+      throw new ApiError(502, "The email service could not accept the password reset email. Please try again later.");
     }
 
     res.json(genericResponse);
@@ -370,4 +395,3 @@ router.post('/logout', authenticate, asyncHandler(async (req,res) => {
   res.json({message:'Signed out.'});
 }));
 module.exports = router;
-
